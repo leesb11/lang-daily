@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0b0c10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="lang.daily">
+<title>lang.daily</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:#0b0c10}
+  body{font-family:'DM Sans','Helvetica Neue',sans-serif;color:#eeecea;font-size:15px;line-height:1.6;overscroll-behavior:none}
+  input,button,select,textarea{font-family:inherit}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .fade{animation:fadeIn 0.25s ease}
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:4px}
+  #root{min-height:100vh}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const G = {
+  bg:"#0b0c10", surf:"#13151c", surf2:"#1a1d26", surf3:"#21242f",
+  border:"rgba(255,255,255,0.07)", border2:"rgba(255,255,255,0.13)",
+  text:"#eeecea", text2:"#8c8d93", text3:"#4a4c54",
+  cn:"#f5bc45", cnSoft:"rgba(245,188,69,0.11)", cnBorder:"rgba(245,188,69,0.22)",
+  en:"#5ca8f8", enSoft:"rgba(92,168,248,0.11)", enBorder:"rgba(92,168,248,0.22)",
+  ok:"#4dca8a", okSoft:"rgba(77,202,138,0.11)",
+  err:"#f07272",
+};
+
+// ── HELPERS ──────────────────────────────────────────────────
+function fmtKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function fmtDisplay(d){const dn=["일","월","화","수","목","금","토"];return `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${dn[d.getDay()]})`;}
+function getLog(key){try{return JSON.parse(localStorage.getItem("ll_"+key)||"null");}catch(e){return null;}}
+function saveLog(key,data){try{localStorage.setItem("ll_"+key,JSON.stringify(data));}catch(e){}}
+
+async function callClaude(apiKey, prompt){
+  const r = await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key":apiKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true"
+    },
+    body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:2500,messages:[{role:"user",content:prompt}]})
+  });
+  if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`오류 ${r.status}`);}
+  const d=await r.json();
+  return d.content.map(b=>b.type==="text"?b.text:"").join("");
+}
+
+// ── SPINNER ──────────────────────────────────────────────────
+function Spinner({isEn}){
+  return(
+    <div style={{textAlign:"center",padding:"40px 20px"}}>
+      <div style={{width:32,height:32,margin:"0 auto 14px",borderRadius:"50%",border:`2px solid rgba(255,255,255,0.1)`,borderTopColor:isEn?G.en:G.cn,animation:"spin 0.8s linear infinite"}}/>
+      <div style={{fontSize:13,color:G.text2}}>{isEn?"Generating content...":"AI가 생성 중..."}</div>
+    </div>
+  );
+}
+
+function ErrBlock({msg,onRetry,isEn}){
+  return(
+    <div style={{textAlign:"center",padding:"24px 16px"}}>
+      <div style={{color:G.err,fontSize:13,marginBottom:14}}>⚠ {msg}</div>
+      <button style={{padding:"9px 18px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:9,cursor:"pointer",fontSize:13}} onClick={onRetry}>↺ {isEn?"Retry":"다시 시도"}</button>
+    </div>
+  );
+}
+
+// ── EXPRESSIONS ──────────────────────────────────────────────
+function ExprCard({items,isEn}){
+  const [open,setOpen]=useState({});
+  const accent=isEn?G.en:G.cn;
+  const accentSoft=isEn?G.enSoft:G.cnSoft;
+  const accentBorder=isEn?G.enBorder:G.cnBorder;
+  return(
+    <div>
+      {items.map((item,i)=>(
+        <div key={i}
+          onClick={()=>setOpen(p=>({...p,[i]:!p[i]}))}
+          style={{background:open[i]?accentSoft:G.surf2,border:`1px solid ${open[i]?accentBorder:G.border}`,borderRadius:10,padding:"15px 16px",cursor:"pointer",transition:"all 0.2s",marginBottom:10}}>
+          <div style={{display:"inline-block",fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:20,marginBottom:7,textTransform:"uppercase",letterSpacing:"0.06em",background:accentSoft,color:accent}}>
+            {item.tag||item.type||"expression"}
+          </div>
+          <div style={{fontSize:isEn?17:22,fontWeight:500,marginBottom:4,fontFamily:isEn?"Georgia,serif":"'Noto Sans SC',sans-serif",letterSpacing:isEn?"-0.2px":"0.03em"}}>
+            {isEn?item.phrase:item.hanzi}
+          </div>
+          {!isEn&&<div style={{fontSize:12,color:G.cn,marginBottom:3,fontFamily:"monospace"}}>{item.pinyin}</div>}
+          <div style={{fontSize:13,color:G.text2}}>{item.meaning}</div>
+          {open[i]&&(
+            <div style={{marginTop:9,paddingTop:9,borderTop:`1px solid ${G.border}`,fontSize:12,color:G.text2}}>
+              {isEn?(
+                <>
+                  <div style={{color:G.en,marginBottom:4,fontFamily:"Georgia,serif",fontSize:13}}>"{item.native_example}"</div>
+                  {item.korean_usage&&<div style={{color:G.text3,marginBottom:4}}>❌ Less natural: "{item.korean_usage}"</div>}
+                  {item.note&&<div style={{color:G.text3,fontStyle:"italic"}}>💡 {item.note}</div>}
+                </>
+              ):(
+                <>
+                  <div style={{fontFamily:"'Noto Sans SC',sans-serif",fontSize:13,marginBottom:3,color:G.text}}>{item.example_cn}</div>
+                  {item.example_pinyin&&<div style={{fontSize:11,color:G.cn,fontFamily:"monospace",marginBottom:3}}>{item.example_pinyin}</div>}
+                  <div style={{color:G.text3}}>{item.example_kr}</div>
+                </>
+              )}
+            </div>
+          )}
+          <div style={{fontSize:10,color:G.text3,marginTop:8,textAlign:"right"}}>{open[i]?"접기 ↑":(isEn?"Tap to expand ↓":"탭하여 예문 보기 ↓")}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── DIALOG ───────────────────────────────────────────────────
+function DialogCard({data,isEn}){
+  const accent=isEn?G.en:G.cn;
+  return(
+    <div>
+      <div style={{fontSize:12,color:G.text3,marginBottom:15,padding:"9px 13px",background:G.surf3,borderRadius:8,borderLeft:`3px solid ${accent}`}}>{data.scene}</div>
+      {(data.turns||[]).map((t,i)=>{
+        const right=t.speaker==="B";
+        return(
+          <div key={i} style={{display:"flex",gap:11,marginBottom:13,alignItems:"flex-start",flexDirection:right?"row-reverse":"row"}}>
+            <div style={{width:30,height:30,flexShrink:0,borderRadius:"50%",background:t.speaker==="A"?(isEn?G.enSoft:G.cnSoft):G.surf3,border:`1px solid ${t.speaker==="A"?(isEn?G.enBorder:G.cnBorder):G.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:600,color:t.speaker==="A"?accent:G.text2}}>
+              {t.speaker}
+            </div>
+            <div style={{background:right?G.surf3:G.surf2,border:`1px solid ${G.border}`,borderRadius:11,padding:"11px 13px",maxWidth:"calc(100% - 46px)"}}>
+              {isEn?(
+                <>
+                  <div style={{fontSize:14,color:G.text}}>{t.text}</div>
+                  {t.note&&<div style={{fontSize:10,color:G.text3,marginTop:4,fontStyle:"italic"}}>💡 {t.note}</div>}
+                </>
+              ):(
+                <>
+                  <div style={{fontFamily:"'Noto Sans SC',sans-serif",fontSize:14,marginBottom:2}}>{t.cn}</div>
+                  <div style={{fontSize:10,color:G.cn,fontFamily:"monospace",marginBottom:2}}>{t.pinyin}</div>
+                  <div style={{fontSize:11,color:G.text2}}>{t.kr}</div>
+                  {t.note&&<div style={{fontSize:10,color:G.text3,marginTop:4,fontStyle:"italic"}}>💡 {t.note}</div>}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── QUIZ ─────────────────────────────────────────────────────
+function QuizCard({data,isEn}){
+  const [idx,setIdx]=useState(0);
+  const [answered,setAnswered]=useState(null);
+  const [score,setScore]=useState(0);
+  const [done,setDone]=useState(false);
+
+  function answer(chosen){
+    if(answered!==null)return;
+    const correct=data.questions[idx].answer;
+    const isCorrect=chosen===correct;
+    if(isCorrect)setScore(s=>s+1);
+    setAnswered({chosen,correct,isCorrect,explanation:data.questions[idx].explanation});
+    setTimeout(()=>{
+      if(idx+1>=data.questions.length){setDone(true);}
+      else{setIdx(i=>i+1);setAnswered(null);}
+    },1600);
+  }
+
+  if(done){
+    return(
+      <div style={{background:G.okSoft,border:"1px solid rgba(77,202,138,0.22)",borderRadius:13,padding:"22px 20px",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>🎉</div>
+        <div style={{fontFamily:"Georgia,serif",fontSize:20,color:G.ok,marginBottom:5}}>{isEn?"Quiz Complete!":"퀴즈 완료!"}</div>
+        <div style={{fontSize:13,color:G.text2}}>{isEn?"Great work today!":"오늘도 수고했습니다!"}</div>
+        <div style={{display:"flex",gap:20,justifyContent:"center",marginTop:14}}>
+          <div style={{textAlign:"center"}}><div style={{fontSize:22,fontWeight:700,fontFamily:"monospace",color:G.ok}}>{score}</div><div style={{fontSize:11,color:G.text3}}>정답</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:22,fontWeight:700,fontFamily:"monospace",color:G.text2}}>{data.questions.length}</div><div style={{fontSize:11,color:G.text3}}>전체</div></div>
+        </div>
+      </div>
+    );
+  }
+
+  const q=data.questions[idx];
+  return(
+    <div>
+      <div style={{fontSize:11,color:G.text3,marginBottom:13,fontFamily:"monospace"}}>{idx+1} / {data.questions.length}</div>
+      <div style={{fontSize:isEn?18:17,marginBottom:18,lineHeight:1.55,fontFamily:isEn?"Georgia,serif":"'Noto Sans SC',sans-serif"}}>{q.q}</div>
+      {q.options.map((opt,i)=>{
+        let bg=G.surf2,border=G.border,color=G.text;
+        if(answered){
+          if(i===answered.correct){bg=G.okSoft;border=G.ok;color=G.ok;}
+          else if(i===answered.chosen){bg="rgba(240,114,114,0.08)";border=G.err;color=G.err;}
+        }
+        return(
+          <div key={i} onClick={()=>answer(i)}
+            style={{background:bg,border:`1px solid ${border}`,borderRadius:9,padding:"13px 15px",cursor:answered?"default":"pointer",transition:"all 0.15s",fontSize:14,display:"flex",alignItems:"center",gap:11,marginBottom:9,color}}>
+            <div style={{width:24,height:24,flexShrink:0,borderRadius:6,background:G.surf3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:G.text3,fontFamily:"monospace"}}>
+              {String.fromCharCode(65+i)}
+            </div>
+            <span style={{fontFamily:isEn?"inherit":"'Noto Sans SC',sans-serif"}}>{opt.replace(/^[ABCD]:/,"")}</span>
+          </div>
+        );
+      })}
+      {answered&&(
+        <div style={{padding:"13px 15px",borderRadius:9,fontSize:13,marginBottom:14,background:answered.isCorrect?G.okSoft:"rgba(240,114,114,0.08)",color:answered.isCorrect?G.ok:G.err,border:`1px solid ${answered.isCorrect?"rgba(77,202,138,0.2)":"rgba(240,114,114,0.2)"}`}}>
+          {answered.isCorrect?"✓ 정답! ":"✗ 오답. "}{answered.explanation}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── STUDY MODULE ─────────────────────────────────────────────
+function StudyModule({lang,apiKey}){
+  const isEn=lang==="en";
+  const today=new Date();
+  const todayKey=fmtKey(today);
+  const [mod,setMod]=useState("expr");
+  const [exprData,setExprData]=useState(null);
+  const [dialogData,setDialogData]=useState(null);
+  const [quizData,setQuizData]=useState(null);
+  const [loading,setLoading]=useState({expr:false,dialog:false,quiz:false});
+  const [error,setError]=useState({});
+  const [modDone,setModDone]=useState({expr:false,dialog:false,quiz:false});
+  const [streak,setStreak]=useState(0);
+  const accent=isEn?G.en:G.cn;
+  const accentText=isEn?"#0a1a30":"#1a1100";
+
+  useEffect(()=>{
+    let s=0;const d=new Date(today);
+    while(true){const k=fmtKey(d);const l=getLog(k);if(l&&(l.cn?.completed||l.en?.completed)){s++;d.setDate(d.getDate()-1);}else break;}
+    setStreak(s);
+    const log=getLog(todayKey);
+    const ll=log?.[lang];
+    if(ll?.expr){setExprData(ll.expr);setModDone(p=>({...p,expr:true}));}
+    else generate("expr");
+    if(ll?.dialog)setDialogData(ll.dialog);
+    if(ll?.quiz)setQuizData(ll.quiz);
+    if(ll?.modules){setModDone(p=>({...p,expr:ll.modules>=1,dialog:ll.modules>=2,quiz:ll.modules>=3}));}
+  },[lang]);
+
+  const generate=useCallback(async(type)=>{
+    if(!apiKey){setError(p=>({...p,[type]:"설정에서 API Key를 먼저 입력해주세요"}));return;}
+    setLoading(p=>({...p,[type]:true}));setError(p=>({...p,[type]:null}));
+    try{
+      let prompt="";
+      const seed=todayKey+"-"+lang;
+      if(type==="expr"){
+        if(isEn){
+          prompt=`You are an advanced English coach for a Korean professional (lived in Canada 9 years, near-native English, works in business).
+Generate 5 expressions that distinguish C2/native speakers from advanced non-natives.
+Focus: subtle collocations, idioms, business power phrases, nuance differences.
+JSON only: {"items":[{"phrase":"...","type":"idiom|collocation|business|nuance","meaning":"...Korean explanation...","native_example":"...natural usage sentence...","korean_usage":"...less natural version Koreans often say...","note":"...why natives prefer this..."}]}
+Seed:${seed}`;
+        }else{
+          prompt=`당신은 중국어 교사입니다. HSK 4-5급 수준의 비즈니스 표현 5개를 생성하세요.
+JSON만 출력하세요: {"items":[{"hanzi":"...","pinyin":"...","meaning":"...한국어 의미...","tag":"비즈니스|협상|회의|이메일|전략","example_cn":"...예문 한자...","example_pinyin":"...예문 병음...","example_kr":"...예문 한국어 번역..."}]}
+시드:${seed}`;
+        }
+      }else if(type==="dialog"){
+        if(isEn){
+          prompt=`Create a business English dialogue for a near-native Korean speaker.
+Scenario: choose from board meeting / client negotiation / strategic planning / investor pitch.
+JSON only: {"scene":"scenario description in Korean","turns":[{"speaker":"A","text":"...","note":"...native phrase highlight..."},...]}
+A=Korean executive, B=native English counterpart. 5 turns only. Keep each turn concise. Include power phrases and natural responses.
+Seed:${seed}`;
+        }else{
+          prompt=`비즈니스 중국어 대화문을 만드세요. 상황: 미팅/협상/발표/파트너십 협의 중 하나를 선택하세요.
+JSON만 출력하세요: {"scene":"상황설명(한국어)","turns":[{"speaker":"A","cn":"...한자...","pinyin":"...","kr":"...한국어...","note":"...문법/표현 포인트..."},...]}
+A=한국 비즈니스맨, B=중국 파트너. 5턴만 생성. 각 cn필드는 짧게 1-2문장으로. 시드:${seed}`;
+        }
+      }else{
+        const log=getLog(todayKey);
+        const ed=log?.[lang]?.expr;
+        const ctx=isEn?(ed?.items?.map(i=>i.phrase).join(", ")||""):(ed?.items?.map(i=>i.hanzi+" "+i.meaning).join(", ")||"");
+        if(isEn){
+          prompt=`English review quiz on nuance and native usage.
+${ctx?"Today's expressions: "+ctx:"Advanced business English expressions"}
+JSON only: {"questions":[{"q":"Choose the most natural native expression:","options":["A:...","B:...","C:...","D:..."],"answer":0,"explanation":"...why this is most natural..."},...]}
+4 questions. answer=index 0-3. Seed:${seed}`;
+        }else{
+          prompt=`중국어 복습 퀴즈를 만드세요.
+${ctx?"오늘 배운 표현: "+ctx:"HSK 4-5급 비즈니스 표현"}
+JSON만 출력하세요: {"questions":[{"q":"빈칸을 채우세요: ...___...","options":["A:...","B:...","C:...","D:..."],"answer":0,"explanation":"...정답 해설..."},...]}
+4문제. answer=인덱스 0-3. 시드:${seed}`;
+        }
+      }
+      const raw=await callClaude(apiKey,prompt);
+      let clean=raw.replace(/```json|```/g,"").trim();
+      // Fix truncated JSON by finding last complete object
+      let data;
+      try {
+        data=JSON.parse(clean);
+      } catch(e) {
+        // Try to recover truncated JSON
+        const lastBrace=clean.lastIndexOf('}');
+        const lastBracket=clean.lastIndexOf(']');
+        if(lastBrace>0||lastBracket>0) {
+          try {
+            // For arrays, close off at last complete item
+            if(clean.includes('"items"')||clean.includes('"turns"')||clean.includes('"questions"')) {
+              const cutAt=Math.max(lastBrace,lastBracket);
+              let attempt=clean.substring(0,cutAt+1);
+              // Count open/close braces to balance
+              let opens=(attempt.match(/\{/g)||[]).length;
+              let closes=(attempt.match(/\}/g)||[]).length;
+              while(closes<opens){attempt+='}';closes++;}
+              let openArr=(attempt.match(/\[/g)||[]).length;
+              let closeArr=(attempt.match(/\]/g)||[]).length;
+              while(closeArr<openArr){attempt+=']';closeArr++;attempt+='}';closes++;}
+              data=JSON.parse(attempt);
+            }
+          } catch(e2) {
+            throw new Error('콘텐츠 생성 중 오류가 발생했습니다. 다시 시도해주세요.');
+          }
+        }
+        if(!data) throw new Error('콘텐츠 생성 중 오류가 발생했습니다. 다시 시도해주세요.');
+      }
+      let log=getLog(todayKey)||{};
+      if(!log[lang])log[lang]={};
+      log[lang][type]=data;
+      if(type==="expr"&&data.items)log[lang].words=data.items.map(i=>isEn?(i.phrase+" — "+i.meaning):(i.hanzi+" — "+i.meaning));
+      setModDone(p=>{
+        const next={...p,[type]:true};
+        const cnt=Object.values(next).filter(Boolean).length;
+        log[lang].modules=cnt;
+        log[lang].completed=cnt===3;
+        saveLog(todayKey,log);
+        return next;
+      });
+      if(type==="expr")setExprData(data);
+      else if(type==="dialog")setDialogData(data);
+      else setQuizData(data);
+    }catch(e){
+      setError(p=>({...p,[type]:e.message}));
+    }
+    setLoading(p=>({...p,[type]:false}));
+  },[apiKey,lang,isEn,todayKey]);
+
+  const doneCnt=Object.values(modDone).filter(Boolean).length;
+  const pct=Math.round((doneCnt/3)*100);
+  const mods=isEn
+    ?[{k:"expr",l:"Expressions"},{k:"dialog",l:"Business Talk"},{k:"quiz",l:"Quiz"}]
+    :[{k:"expr",l:"표현 학습"},{k:"dialog",l:"비즈니스 회화"},{k:"quiz",l:"복습 퀴즈"}];
+
+  return(
+    <div style={{padding:"20px 18px",maxWidth:720,margin:"0 auto"}}>
+      <div style={{fontFamily:"Georgia,serif",fontSize:26,letterSpacing:"-0.4px",marginBottom:5,color:accent}}>
+        {isEn?"Today's English":"오늘의 중국어"}
+      </div>
+      <div style={{fontSize:13,color:G.text2,marginBottom:18}}>{fmtDisplay(today)} · {isEn?"Advanced English · 30min":"중국어 집중 학습 · 30분"}</div>
+
+      {/* Streak */}
+      <div style={{display:"flex",alignItems:"center",gap:11,padding:"13px 15px",background:G.surf2,borderRadius:9,border:`1px solid ${isEn?G.enBorder:G.cnBorder}`,marginBottom:12}}>
+        <div style={{fontSize:22}}>{isEn?"⚡":"🔥"}</div>
+        <div>
+          <div style={{fontSize:24,fontWeight:700,fontFamily:"monospace",color:accent,lineHeight:1}}>{streak}</div>
+          <div style={{fontSize:11,color:G.text2,marginTop:2}}>{isEn?"day streak":"일 연속 학습"}</div>
+        </div>
+        <div style={{flex:1}}/>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:11,color:G.text3,marginBottom:3}}>{isEn?"Progress":"오늘 진행도"}</div>
+          <div style={{fontSize:13,fontWeight:500}}>{doneCnt} / 3 {isEn?"modules":"모듈"}</div>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{background:G.surf2,borderRadius:4,height:3,marginBottom:4,overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",borderRadius:4,background:accent,transition:"width 0.4s ease"}}/>
+      </div>
+      <div style={{textAlign:"right",fontSize:10,color:G.text3,marginBottom:16}}>{pct}%</div>
+
+      {/* Module nav */}
+      <div style={{display:"flex",gap:0,background:G.surf2,borderRadius:8,padding:3,marginBottom:18}}>
+        {mods.map(m=>(
+          <button key={m.k}
+            onClick={()=>{setMod(m.k);}}
+            style={{flex:1,padding:"7px 4px",background:mod===m.k?G.surf:"none",border:"none",cursor:"pointer",borderRadius:6,fontFamily:"inherit",fontSize:12,fontWeight:500,color:mod===m.k?G.text:G.text3,transition:"all 0.15s",textAlign:"center"}}>
+            {modDone[m.k]&&<span style={{color:G.ok}}>✓ </span>}{m.l}
+          </button>
+        ))}
+      </div>
+
+      {/* Content cards */}
+      {mod==="expr"&&(
+        <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:14,padding:"20px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{fontSize:10,fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",color:G.text3,display:"flex",alignItems:"center",gap:6}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:accent,display:"inline-block"}}/>
+              {isEn?"Native Expressions & Nuance":"HSK 4-5급 비즈니스 표현"}
+            </div>
+            <div style={{fontSize:11,color:G.text3,fontFamily:"monospace",background:G.surf2,padding:"4px 10px",borderRadius:20,border:`1px solid ${G.border}`}}>~10{isEn?" min":"분"}</div>
+          </div>
+          {loading.expr?<Spinner isEn={isEn}/>:error.expr?<ErrBlock msg={error.expr} onRetry={()=>generate("expr")} isEn={isEn}/>:exprData?<ExprCard items={exprData.items||[]} isEn={isEn}/>:<div style={{textAlign:"center",padding:"20px 0"}}><button style={{padding:"10px 20px",background:accent,color:accentText,border:"none",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:500}} onClick={()=>generate("expr")}>{isEn?"Generate":"생성하기"}</button></div>}
+          <div style={{marginTop:12}}>
+            <button style={{padding:"7px 13px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:9,cursor:"pointer",fontSize:12}} onClick={()=>generate("expr")}>↺ {isEn?"Regenerate":"새로 생성"}</button>
+          </div>
+        </div>
+      )}
+
+      {mod==="dialog"&&(
+        <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:14,padding:"20px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{fontSize:10,fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",color:G.text3,display:"flex",alignItems:"center",gap:6}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:accent,display:"inline-block"}}/>
+              {isEn?"Business Scenarios":"비즈니스 상황 회화"}
+            </div>
+            <div style={{fontSize:11,color:G.text3,fontFamily:"monospace",background:G.surf2,padding:"4px 10px",borderRadius:20,border:`1px solid ${G.border}`}}>~12{isEn?" min":"분"}</div>
+          </div>
+          {loading.dialog?<Spinner isEn={isEn}/>:error.dialog?<ErrBlock msg={error.dialog} onRetry={()=>generate("dialog")} isEn={isEn}/>:dialogData?<DialogCard data={dialogData} isEn={isEn}/>:<div style={{textAlign:"center",padding:"20px 0"}}><button style={{padding:"10px 20px",background:accent,color:accentText,border:"none",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:500}} onClick={()=>generate("dialog")}>{isEn?"Generate":"생성하기"}</button></div>}
+          <div style={{marginTop:12}}>
+            <button style={{padding:"7px 13px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:9,cursor:"pointer",fontSize:12}} onClick={()=>generate("dialog")}>↺ {isEn?"Regenerate":"새로 생성"}</button>
+          </div>
+        </div>
+      )}
+
+      {mod==="quiz"&&(
+        <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:14,padding:"20px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{fontSize:10,fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",color:G.text3,display:"flex",alignItems:"center",gap:6}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:accent,display:"inline-block"}}/>
+              {isEn?"Review Quiz":"복습 퀴즈"}
+            </div>
+            <div style={{fontSize:11,color:G.text3,fontFamily:"monospace",background:G.surf2,padding:"4px 10px",borderRadius:20,border:`1px solid ${G.border}`}}>~8{isEn?" min":"분"}</div>
+          </div>
+          {loading.quiz?<Spinner isEn={isEn}/>:error.quiz?<ErrBlock msg={error.quiz} onRetry={()=>generate("quiz")} isEn={isEn}/>:quizData?<QuizCard key={quizData} data={quizData} isEn={isEn}/>:<div style={{textAlign:"center",padding:"20px 0"}}><button style={{padding:"10px 20px",background:accent,color:accentText,border:"none",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:500}} onClick={()=>generate("quiz")}>{isEn?"Start Quiz":"퀴즈 시작"}</button></div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CALENDAR ─────────────────────────────────────────────────
+function CalendarView(){
+  const today=new Date();
+  const [year,setYear]=useState(today.getFullYear());
+  const [month,setMonth]=useState(today.getMonth());
+  const [selected,setSelected]=useState(fmtKey(today));
+
+  function nav(d){let m=month+d,y=year;if(m<0){m=11;y--;}if(m>11){m=0;y++;}setMonth(m);setYear(y);}
+
+  const first=new Date(year,month,1).getDay();
+  const last=new Date(year,month+1,0).getDate();
+  const prevLast=new Date(year,month,0).getDate();
+  const cells=[];
+  for(let i=0;i<first;i++)cells.push({d:prevLast-first+1+i,other:true});
+  for(let d=1;d<=last;d++){
+    const key=`${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    const log=getLog(key);
+    cells.push({d,key,hasCN:log?.cn?.completed,hasEN:log?.en?.completed,isToday:key===fmtKey(today)});
+  }
+  while(cells.length<42)cells.push({d:cells.length-first-last+1,other:true});
+
+  const allKeys=Object.keys(localStorage).filter(k=>k.startsWith("ll_")&&k.slice(3).match(/^\d{4}-\d{2}-\d{2}$/)).map(k=>k.slice(3)).sort((a,b)=>b.localeCompare(a));
+
+  return(
+    <div style={{padding:"20px 18px",maxWidth:720,margin:"0 auto"}}>
+      <div style={{fontFamily:"Georgia,serif",fontSize:26,marginBottom:5}}>학습 기록</div>
+      <div style={{fontSize:13,color:G.text2,marginBottom:20}}>날짜를 선택해 그날의 학습 내용을 확인하세요</div>
+
+      <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:14,padding:"20px",marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+          <button onClick={()=>nav(-1)} style={{padding:"6px 14px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:8,cursor:"pointer",fontSize:16}}>‹</button>
+          <div style={{fontFamily:"Georgia,serif",fontSize:17}}>{year}년 {month+1}월</div>
+          <button onClick={()=>nav(1)} style={{padding:"6px 14px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:8,cursor:"pointer",fontSize:16}}>›</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:16}}>
+          {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d=>(
+            <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:600,color:G.text3,letterSpacing:"0.06em",textTransform:"uppercase",padding:"5px 0"}}>{d}</div>
+          ))}
+          {cells.map((c,i)=>(
+            <div key={i}
+              onClick={()=>c.key&&setSelected(c.key)}
+              style={{aspectRatio:"1",borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontSize:12,cursor:c.key?"pointer":"default",transition:"all 0.15s",gap:2,background:c.key===selected?G.surf3:c.isToday?G.surf2:"none",border:c.isToday?`1px solid ${G.border2}`:"1px solid transparent",color:c.other?G.text3:G.text,opacity:c.other?0.4:1}}>
+              <span>{c.d}</span>
+              {(c.hasCN||c.hasEN)&&(
+                <div style={{display:"flex",gap:2}}>
+                  {c.hasCN&&<div style={{width:4,height:4,borderRadius:"50%",background:G.cn}}/>}
+                  {c.hasEN&&<div style={{width:4,height:4,borderRadius:"50%",background:G.en}}/>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:14,fontSize:11,color:G.text3}}>
+          <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:6,height:6,borderRadius:"50%",background:G.cn,display:"inline-block"}}/> 중국어 완료</span>
+          <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:6,height:6,borderRadius:"50%",background:G.en,display:"inline-block"}}/> 영어 완료</span>
+        </div>
+      </div>
+
+      {allKeys.length===0?(
+        <div style={{textAlign:"center",padding:"40px 20px",color:G.text3}}>
+          <div style={{fontSize:32,marginBottom:10}}>📚</div>
+          <div>아직 학습 기록이 없습니다</div>
+        </div>
+      ):allKeys.map(key=>{
+        const log=getLog(key);
+        const d=new Date(key+"T00:00:00");
+        return <LogEntry key={key} dateLabel={fmtDisplay(d)} log={log} defaultOpen={key===selected}/>;
+      })}
+    </div>
+  );
+}
+
+function LogEntry({dateLabel,log,defaultOpen}){
+  const [open,setOpen]=useState(defaultOpen);
+  const cnWords=log?.cn?.words||[];
+  const enWords=log?.en?.words||[];
+  return(
+    <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:12,overflow:"hidden",marginBottom:10}}>
+      <div onClick={()=>setOpen(p=>!p)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 17px",cursor:"pointer"}}>
+        <div style={{fontSize:14,fontWeight:500}}>{dateLabel}</div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          {log?.cn&&<span style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:20,background:G.cnSoft,color:G.cn}}>中 {log.cn.modules||0}/3</span>}
+          {log?.en&&<span style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:20,background:G.enSoft,color:G.en}}>EN {log.en.modules||0}/3</span>}
+          <span style={{fontSize:12,color:G.text3,marginLeft:4}}>{open?"▲":"▼"}</span>
+        </div>
+      </div>
+      {open&&(
+        <div style={{padding:"0 17px 16px"}}>
+          {cnWords.length>0&&(
+            <>
+              <div style={{fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:G.text3,margin:"10px 0 7px"}}>🇨🇳 중국어 표현</div>
+              {cnWords.map((w,i)=><div key={i} style={{fontSize:12,color:G.text2,paddingLeft:14,marginBottom:5,position:"relative"}}><span style={{position:"absolute",left:0,top:7,width:4,height:4,borderRadius:"50%",background:G.text3,display:"inline-block"}}/>{w}</div>)}
+            </>
+          )}
+          {enWords.length>0&&(
+            <>
+              <div style={{fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:G.text3,margin:"12px 0 7px"}}>🇬🇧 English Expressions</div>
+              {enWords.map((w,i)=><div key={i} style={{fontSize:12,color:G.text2,paddingLeft:14,marginBottom:5,position:"relative"}}><span style={{position:"absolute",left:0,top:7,width:4,height:4,borderRadius:"50%",background:G.text3,display:"inline-block"}}/>{w}</div>)}
+            </>
+          )}
+          {!cnWords.length&&!enWords.length&&<div style={{fontSize:12,color:G.text3,paddingTop:4}}>저장된 표현 데이터 없음</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SETTINGS ─────────────────────────────────────────────────
+function SettingsView({apiKey,setApiKey}){
+  const [input,setInput]=useState(apiKey);
+  const [status,setStatus]=useState(null);
+
+  async function test(){
+    setStatus({msg:"연결 테스트 중...",ok:null});
+    try{await callClaude(input,'Say "OK" only.');setStatus({msg:"✓ 연결 성공!",ok:true});}
+    catch(e){setStatus({msg:"✗ "+e.message,ok:false});}
+  }
+  function save(){
+    localStorage.setItem("ll_apikey",input);
+    setApiKey(input);
+    setStatus({msg:"✓ 저장되었습니다",ok:true});
+  }
+
+  return(
+    <div style={{padding:"20px 18px",maxWidth:720,margin:"0 auto"}}>
+      <div style={{fontFamily:"Georgia,serif",fontSize:26,marginBottom:20}}>설정</div>
+      <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:14,padding:"20px",marginBottom:14}}>
+        <div style={{fontSize:14,fontWeight:500,marginBottom:3}}>Anthropic API Key</div>
+        <div style={{fontSize:12,color:G.text3,marginBottom:10}}>Claude API를 사용해 매일 새로운 콘텐츠를 생성합니다</div>
+        <input
+          style={{width:"100%",background:G.surf2,border:`1px solid ${G.border2}`,borderRadius:8,padding:"10px 13px",color:G.text,fontFamily:"monospace",fontSize:13,outline:"none"}}
+          type="password" value={input} onChange={e=>setInput(e.target.value)} placeholder="sk-ant-..."/>
+        {status&&<div style={{fontSize:12,marginTop:8,color:status.ok===null?G.text2:status.ok?G.ok:G.err}}>{status.msg}</div>}
+        <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+          <button style={{padding:"10px 20px",background:G.cn,color:"#1a1100",border:"none",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:500}} onClick={save}>저장</button>
+          <button style={{padding:"9px 16px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:9,cursor:"pointer",fontSize:13}} onClick={test}>연결 테스트</button>
+        </div>
+      </div>
+      <div style={{background:G.surf,border:`1px solid ${G.cnBorder}`,borderRadius:14,padding:"20px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.1em",color:G.cn,marginBottom:14}}>API Key 발급 방법</div>
+        {["console.anthropic.com 접속","회원가입 또는 로그인","API Keys 메뉴에서 새 키 생성","sk-ant-... 키를 위 입력창에 붙여넣고 저장"].map((s,i)=>(
+          <div key={i} style={{display:"flex",gap:10,marginBottom:10,fontSize:13,color:G.text2}}>
+            <span style={{width:20,height:20,borderRadius:"50%",background:G.cnSoft,color:G.cn,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0}}>{i+1}</span>
+            {s}
+          </div>
+        ))}
+        <div style={{fontSize:11,color:G.text3,marginTop:8}}>* API Key는 브라우저 로컬스토리지에만 저장되며 외부로 전송되지 않습니다</div>
+      </div>
+      <div style={{background:G.surf,border:`1px solid ${G.border}`,borderRadius:14,padding:"20px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:14}}>학습 데이터 초기화</div>
+            <div style={{fontSize:12,color:G.text3,marginTop:2}}>저장된 모든 학습 기록을 삭제합니다</div>
+          </div>
+          <button
+            style={{padding:"8px 14px",background:G.surf2,border:`1px solid ${G.border2}`,color:G.text2,borderRadius:9,cursor:"pointer",fontSize:12}}
+            onClick={()=>{if(confirm("모든 기록을 삭제할까요?"))Object.keys(localStorage).filter(k=>k.startsWith("ll_")&&k!=="ll_apikey").forEach(k=>localStorage.removeItem(k));}}>
+            초기화
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ROOT ─────────────────────────────────────────────────────
+function App(){
+  const [apiKey,setApiKey]=useState(()=>localStorage.getItem("ll_apikey")||"");
+  const [page,setPage]=useState("cn");
+  const isStudy=page==="cn"||page==="en";
+
+  return(
+    <div style={{fontFamily:"'DM Sans','Helvetica Neue',sans-serif",background:G.bg,minHeight:"100vh",color:G.text,fontSize:15,lineHeight:1.6}}>
+      {/* Header */}
+      <header style={{position:"sticky",top:0,zIndex:100,background:"rgba(11,12,16,0.93)",backdropFilter:"blur(20px)",borderBottom:`1px solid ${G.border}`,padding:"0 18px",display:"flex",alignItems:"center",justifyContent:"space-between",height:56}}>
+        <div style={{fontFamily:"Georgia,serif",fontSize:19,letterSpacing:"-0.3px"}}>lang<span style={{color:G.cn}}>.</span>daily</div>
+        <nav style={{display:"flex",gap:2}}>
+          {[["cn","학습"],["cal","기록"],["settings","설정"]].map(([k,l])=>(
+            <button key={k}
+              onClick={()=>setPage(k==="cn"?(page==="en"?"en":"cn"):k)}
+              style={{background:(page===k||(k==="cn"&&isStudy))?G.surf2:"none",border:"none",cursor:"pointer",color:(page===k||(k==="cn"&&isStudy))?G.text:G.text2,fontFamily:"inherit",fontSize:13,fontWeight:500,padding:"6px 12px",borderRadius:8,transition:"all 0.15s"}}>
+              {l}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      {/* Language tabs */}
+      {isStudy&&(
+        <div style={{display:"flex",background:G.surf,borderBottom:`1px solid ${G.border}`,padding:"0 18px",overflowX:"auto"}}>
+          {[["cn","중국어 30분",G.cn],["en","English 30min",G.en]].map(([k,l,c])=>(
+            <button key={k} onClick={()=>setPage(k)}
+              style={{flexShrink:0,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:500,color:page===k?c:G.text3,padding:"13px 16px",borderBottom:page===k?`2px solid ${c}`:"2px solid transparent",transition:"all 0.15s",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:7}}>
+              <span style={{width:5,height:5,borderRadius:"50%",background:c,display:"inline-block"}}/>
+              {l}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Pages */}
+      {page==="cn"&&<StudyModule key="cn" lang="cn" apiKey={apiKey}/>}
+      {page==="en"&&<StudyModule key="en" lang="en" apiKey={apiKey}/>}
+      {page==="cal"&&<CalendarView/>}
+      {page==="settings"&&<SettingsView apiKey={apiKey} setApiKey={setApiKey}/>}
+    </div>
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
